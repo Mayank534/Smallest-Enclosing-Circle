@@ -10,7 +10,8 @@
         .main-container { display: flex; gap: 20px; align-items: flex-start; }
         canvas { background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); cursor: crosshair; flex-shrink: 0; }
         .info-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); flex-grow: 1; max-width: 550px; }
-        button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; background-color: #007bff; color: white; font-weight: bold; }
+        
+        button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; background-color: #007bff; color: white; font-weight: bold; transition: 0.2s;}
         button:hover { background-color: #0056b3; }
         .btn-danger { background-color: #dc3545; }
         .btn-danger:hover { background-color: #c82333; }
@@ -19,6 +20,8 @@
         .btn-warning:hover { background-color: #d35400; }
         .btn-info { background-color: #17a2b8; }
         .btn-info:hover { background-color: #138496; }
+        .btn-brute { background-color: #8e44ad; }
+        .btn-brute:hover { background-color: #732d91; }
         .btn-zoom { background-color: #6c757d; font-size: 14px; padding: 6px 10px;}
         .btn-zoom:hover { background-color: #5a6268; }
         
@@ -31,6 +34,7 @@
         .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 4px;}
         .metrics { margin-bottom: 15px; padding: 10px; background: #e8f4f8; border-radius: 4px; border: 1px solid #bce8f1; font-family: monospace; font-size: 14px; display: none;}
         .clarkson-metrics { background: #fff3cd; border: 1px solid #ffeeba; }
+        .brute-metrics { background: #f4ecf7; border: 1px solid #d7bde2; }
     </style>
 </head>
 <body>
@@ -48,11 +52,11 @@
         <div style="border-left: 2px solid #eee; height: 30px;"></div>
 
         <button class="btn-success" onclick="calculateFastAPI()">FastAPI (CGAL)</button>
-        <button style="background: #8e44ad;" onclick="startVisualization()">Step-by-Step</button>
+        <button class="btn-info" onclick="startVisualization()">Step-by-Step</button>
+        <button class="btn-warning" style="background:#f1c40f; color:#333;" onclick="runClarksons()">Clarkson (n/2)</button>
+        <button class="btn-brute" onclick="runBruteForce()">Brute Force (nC2 & nC3)</button>
         
-        <button class="btn-info" onclick="runClarksons()">Test Clarkson (n/2)</button>
-        
-        <label style="font-size: 14px;">Speed: <input type="range" id="speed" min="50" max="1500" value="500" style="direction: rtl; width: 80px;"></label>
+        <label style="font-size: 14px;">Speed: <input type="range" id="speed" min="5" max="1500" value="300" style="direction: rtl; width: 80px;"></label>
     </div>
 
     <div class="main-container">
@@ -73,7 +77,13 @@
             <div class="legend" id="clarkson-legend" style="display: none;">
                 <span><span class="dot" style="background:#3498db;"></span> Sampled (n/2)</span>
                 <span><span class="dot" style="background:#bdc3c7;"></span> Safe (Inside)</span>
-                <span><span class="dot" style="background:#e74c3c;"></span> Violation (Outside)</span>
+                <span><span class="dot" style="background:#e74c3c;"></span> Violation</span>
+            </div>
+
+            <div class="legend" id="brute-legend" style="display: none;">
+                <span><span class="dot" style="background:#f1c40f;"></span> Testing Combo</span>
+                <span><span class="dot" style="background:#e74c3c;"></span> Points Outside</span>
+                <span><span class="dot" style="background:#2ecc71;"></span> Best Valid MEC</span>
             </div>
 
             <pre><code id="code-block">
@@ -103,29 +113,56 @@
         let points = []; 
         let isAnimating = false;
         
-        // --- View & Render State ---
         let zoomLevel = 1.0;
-        // ADDED 'mode' to track which renderer to use
         let currentRenderState = { mode: 'standard', mec: null, pI: null, pJ: null, pK: null, highlightCircle: false, color: null };
 
         // --- Math Helpers ---
         function getDistance(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
         function isInside(c, p) { return c && getDistance(c, p) <= c.r + 1e-9; }
-        function circleFrom2Points(a, b) { return { x: (a.x + b.x) / 2.0, y: (a.y + b.y) / 2.0, r: getDistance(a, b) / 2.0 }; }
         
+        function circleFrom2Points(a, b) { 
+            return { 
+                x: (a.x + b.x) / 2.0, 
+                y: (a.y + b.y) / 2.0, 
+                r: getDistance(a, b) / 2.0,
+                def: [a, b]
+            }; 
+        }
+        
+        // MODIFIED: Robust Obtuse Triangle Checking
         function circleFrom3Points(a, b, c) {
+            // Calculate squared lengths of the triangle's sides
+            const dAB2 = (a.x - b.x)**2 + (a.y - b.y)**2;
+            const dBC2 = (b.x - c.x)**2 + (b.y - c.y)**2;
+            const dCA2 = (c.x - a.x)**2 + (c.y - a.y)**2;
+
+            // Check for obtuse angles (using a^2 + b^2 < c^2).
+            // If the triangle is obtuse (or collinear), the MEC is strictly defined by the longest side.
+            if (dAB2 >= dBC2 + dCA2) return circleFrom2Points(a, b);
+            if (dBC2 >= dAB2 + dCA2) return circleFrom2Points(b, c);
+            if (dCA2 >= dAB2 + dBC2) return circleFrom2Points(c, a);
+
+            // If acute, compute the mathematical circumcircle
             const bx = b.x - a.x, by = b.y - a.y;
             const cx = c.x - a.x, cy = c.y - a.y;
             const B = bx * bx + by * by;
             const C = cx * cx + cy * cy;
             const D = bx * cy - by * cx;
-            if (Math.abs(D) < 1e-9) return { x: 0, y: 0, r: 0 };
+            
+            // Fallback for mathematical collinear precision jitter
+            if (Math.abs(D) < 1e-9) return { x: 0, y: 0, r: 0 }; 
+            
             const ux = (cy * B - by * C) / (2 * D) + a.x;
             const uy = (bx * C - cx * B) / (2 * D) + a.y;
-            return { x: ux, y: uy, r: getDistance({x: ux, y: uy}, a) };
+            
+            return { 
+                x: ux, 
+                y: uy, 
+                r: getDistance({x: ux, y: uy}, a),
+                def: [a, b, c]
+            };
         }
 
-        // NEW: Fast Synchronous MEC for Clarkson's Bound calculation
         function computeMECSync(P) {
             let n = P.length;
             if (n === 0) return {x:0, y:0, r:0};
@@ -177,7 +214,7 @@
             const worldY = (rawY - canvas.height / 2) / zoomLevel + canvas.height / 2;
 
             points.push({x: worldX, y: worldY, id: points.length});
-            updateVisuals(null, null, null, null); 
+            updateVisualsStandard(null, null, null, null); 
         };
 
         function generateRandomPoints(num) {
@@ -190,14 +227,14 @@
                     id: points.length
                 });
             }
-            updateVisuals(null, null, null, null);
+            updateVisualsStandard(null, null, null, null);
         }
 
         function clearCanvas() {
             isAnimating = false;
             points = [];
             resetZoom();
-            updateVisuals(null, null, null, null);
+            updateVisualsStandard(null, null, null, null);
             document.getElementById('status-text').innerText = "Canvas cleared.";
             document.getElementById('metrics').style.display = 'none';
             highlightLine(0);
@@ -210,15 +247,112 @@
                 [points[i], points[j]] = [points[j], points[i]];
             }
             points.forEach((p, i) => p.id = i);
-            updateVisuals(null, null, null, null);
-            document.getElementById('status-text').innerText = "Order randomized! Notice how the labels changed positions.";
-            document.getElementById('metrics').style.display = 'none';
+            updateVisualsStandard(null, null, null, null);
+            document.getElementById('status-text').innerText = "Order randomized!";
         }
 
-        // --- NEW: Clarkson's Logic ---
+        // --- BRUTE FORCE LOGIC ---
+        async function runBruteForce() {
+            if (isAnimating || points.length < 2) return;
+            
+            if (points.length > 15) {
+                alert("Brute force involves checking nC2 + nC3 combinations, and validating each against all n points (O(n^4)). Please use 15 points or fewer for animation.");
+                return;
+            }
+
+            isAnimating = true;
+            highlightLine(0);
+            
+            let n = points.length;
+            let bestCircle = null;
+            let validCirclesCount = 0;
+
+            const updateMetrics = (comboType, currentR) => {
+                const metricsDiv = document.getElementById('metrics');
+                metricsDiv.className = 'metrics brute-metrics';
+                metricsDiv.style.display = 'block';
+                metricsDiv.innerHTML = `
+                    <strong>Mode:</strong> Testing all ${comboType} combinations<br>
+                    <strong>Valid Enclosing Circles Found:</strong> ${validCirclesCount}<br>
+                    <strong>Smallest Radius So Far:</strong> <span style="color:#2ecc71; font-weight:bold;">${bestCircle ? bestCircle.r.toFixed(2) : 'None'}</span>
+                `;
+            };
+
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    if (!isAnimating) return;
+                    let speed = document.getElementById('speed').value;
+                    
+                    let c = circleFrom2Points(points[i], points[j]);
+                    let violations = [];
+                    let isValid = true;
+
+                    for (let p of points) {
+                        if (!isInside(c, p)) {
+                            isValid = false;
+                            violations.push(p);
+                        }
+                    }
+
+                    if (isValid) {
+                        validCirclesCount++;
+                        if (!bestCircle || c.r < bestCircle.r) {
+                            bestCircle = c; 
+                        }
+                    }
+
+                    document.getElementById('status-text').innerText = `Brute Force: Pair (Diameter) P[${points[i].id}], P[${points[j].id}] -> ${isValid ? 'VALID' : 'INVALID'}`;
+                    updateMetrics("Pairs (nC2)");
+                    updateVisualsBruteForce(c, [points[i], points[j]], violations, bestCircle);
+                    
+                    await sleep(speed);
+                }
+            }
+
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    for (let k = j + 1; k < n; k++) {
+                        if (!isAnimating) return;
+                        let speed = document.getElementById('speed').value;
+                        
+                        let c = circleFrom3Points(points[i], points[j], points[k]);
+                        if (c.r === 0) continue; 
+
+                        let violations = [];
+                        let isValid = true;
+
+                        for (let p of points) {
+                            if (!isInside(c, p)) {
+                                isValid = false;
+                                violations.push(p);
+                            }
+                        }
+
+                        if (isValid) {
+                            validCirclesCount++;
+                            if (!bestCircle || c.r < bestCircle.r) {
+                                bestCircle = c; 
+                            }
+                        }
+
+                        document.getElementById('status-text').innerText = `Brute Force: Triplet P[${points[i].id}], P[${points[j].id}], P[${points[k].id}] -> ${isValid ? 'VALID' : 'INVALID'}`;
+                        updateMetrics("Triplets (nC3)");
+                        updateVisualsBruteForce(c, [points[i], points[j], points[k]], violations, bestCircle);
+                        
+                        await sleep(speed);
+                    }
+                }
+            }
+
+            document.getElementById('status-text').innerText = "Brute Force Complete! The Green circle is the absolute minimum.";
+            updateVisualsBruteForce(null, [], [], bestCircle); 
+            isAnimating = false;
+        }
+
+        // --- CLARKSON LOGIC ---
         function runClarksons() {
             if (isAnimating) return;
-            if (points.length < 20) { generateRandomPoints(50 - points.length); } // Auto-fill for good demo
+            if (points.length < 20) { generateRandomPoints(40 - points.length); } 
 
             const n = points.length;
             const k = Math.floor(n / 2);
@@ -239,6 +373,7 @@
             let expected = 3 * (n - k) / (k + 1);
 
             document.getElementById('standard-legend').style.display = 'none';
+            document.getElementById('brute-legend').style.display = 'none';
             document.getElementById('clarkson-legend').style.display = 'block';
             document.getElementById('status-text').innerText = "Clarkson's Identity: Visualizing Violations";
             
@@ -249,8 +384,7 @@
                 <strong>Total Points (n):</strong> ${n}<br>
                 <strong>Sampled Points (k):</strong> ${k}<br>
                 <hr style="border-top:1px solid #ffeeba; margin: 8px 0;">
-                <strong>Expected Violations:</strong> <span style="color:#e67e22">${expected.toFixed(2)}</span> 
-                <span style="font-size:11px; color:#856404;">[ Formula: 3 * (n-k)/(k+1) ]</span><br>
+                <strong>Expected Violations:</strong> <span style="color:#e67e22">${expected.toFixed(2)}</span><br>
                 <strong>Actual Violations:</strong> <span style="color:#c0392b; font-weight:bold;">${violations.length}</span>
             `;
 
@@ -274,11 +408,11 @@
                 });
                 const data = await response.json();
                 
-                updateVisuals({x: data.center_x, y: data.center_y, r: data.radius}, null, null, null, false, '#28a745');
+                updateVisualsStandard({x: data.center_x, y: data.center_y, r: data.radius}, null, null, null, false, '#28a745');
                 
                 document.getElementById('status-text').innerText = "CGAL Backend Computation Complete!";
                 const metricsDiv = document.getElementById('metrics');
-                metricsDiv.className = 'metrics'; // reset style
+                metricsDiv.className = 'metrics'; 
                 metricsDiv.style.display = 'block';
                 metricsDiv.innerHTML = `
                     <strong>Center:</strong> (${data.center_x.toFixed(2)}, ${data.center_y.toFixed(2)})<br>
@@ -313,7 +447,7 @@
             highlightLine(1);
             let mec = circleFrom2Points(P[0], P[1]);
             document.getElementById('status-text').innerText = `Init: Circle from P[0] and P[1]`;
-            updateVisuals(mec, null, null, null);
+            updateVisualsStandard(mec, null, null, null);
             await sleep(speed);
 
             for (let i = 2; i < n; i++) {
@@ -321,7 +455,7 @@
                 
                 highlightLine(2);
                 document.getElementById('status-text').innerText = `Loop i: Checking P[${i}]`;
-                updateVisuals(mec, P[i], null, null);
+                updateVisualsStandard(mec, P[i], null, null);
                 await sleep(speed);
 
                 highlightLine(3);
@@ -329,14 +463,14 @@
                     highlightLine(4);
                     mec = circleFrom2Points(P[0], P[i]);
                     document.getElementById('status-text').innerText = `P[${i}] OUTSIDE. New MEC = P[0], P[${i}]`;
-                    updateVisuals(mec, P[i], null, null, true);
+                    updateVisualsStandard(mec, P[i], null, null, true);
                     await sleep(speed * 1.5);
 
                     for (let j = 1; j < i; j++) {
                         if(!isAnimating) return;
                         highlightLine(5);
                         document.getElementById('status-text').innerText = `Loop j: Checking P[${j}]`;
-                        updateVisuals(mec, P[i], P[j], null);
+                        updateVisualsStandard(mec, P[i], P[j], null);
                         await sleep(speed);
 
                         highlightLine(6);
@@ -344,14 +478,14 @@
                             highlightLine(7);
                             mec = circleFrom2Points(P[i], P[j]);
                             document.getElementById('status-text').innerText = `P[${j}] OUTSIDE. New MEC = P[${i}], P[${j}]`;
-                            updateVisuals(mec, P[i], P[j], null, true);
+                            updateVisualsStandard(mec, P[i], P[j], null, true);
                             await sleep(speed * 1.5);
 
                             for (let k = 0; k < j; k++) {
                                 if(!isAnimating) return;
                                 highlightLine(8);
                                 document.getElementById('status-text').innerText = `Loop k: Checking P[${k}]`;
-                                updateVisuals(mec, P[i], P[j], P[k]);
+                                updateVisualsStandard(mec, P[i], P[j], P[k]);
                                 await sleep(speed);
 
                                 highlightLine(9);
@@ -359,7 +493,7 @@
                                     highlightLine(10);
                                     mec = circleFrom3Points(P[i], P[j], P[k]);
                                     document.getElementById('status-text').innerText = `P[${k}] OUTSIDE. New MEC = P[${i}], P[${j}], P[${k}]`;
-                                    updateVisuals(mec, P[i], P[j], P[k], true);
+                                    updateVisualsStandard(mec, P[i], P[j], P[k], true);
                                     await sleep(speed * 1.5);
                                 }
                             }
@@ -368,18 +502,37 @@
                 }
             }
             
-            updateVisuals(mec, null, null, null);
+            updateVisualsStandard(mec, null, null, null);
             document.getElementById('status-text').innerText = "Visualization Complete!";
             return mec;
         }
 
         // --- Core Rendering Engine ---
-        function updateVisuals(mec, pI, pJ, pK, highlightCircle = false, color = null) {
-            // Forces standard mode rendering
+        function updateVisualsStandard(mec, pI, pJ, pK, highlightCircle = false, color = null) {
             document.getElementById('clarkson-legend').style.display = 'none';
+            document.getElementById('brute-legend').style.display = 'none';
             document.getElementById('standard-legend').style.display = 'block';
             currentRenderState = { mode: 'standard', mec, pI, pJ, pK, highlightCircle, color };
             renderCanvas();
+        }
+
+        function updateVisualsBruteForce(testingCircle, activePoints, violations, bestCircle) {
+            document.getElementById('standard-legend').style.display = 'none';
+            document.getElementById('clarkson-legend').style.display = 'none';
+            document.getElementById('brute-legend').style.display = 'block';
+            currentRenderState = { mode: 'bruteforce', testingCircle, activePoints, violations, bestCircle };
+            renderCanvas();
+        }
+
+        function drawDiameterLine(p1, p2, color, invZ) {
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = color;
+            ctx.setLineDash([4 * invZ, 4 * invZ]);
+            ctx.lineWidth = 1 * invZ;
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
 
         function renderCanvas() {
@@ -397,7 +550,6 @@
             if (currentRenderState.mode === 'standard') {
                 const { mec, pI, pJ, pK, highlightCircle, color } = currentRenderState;
                 
-                // Base Points
                 points.forEach(p => { 
                     ctx.fillStyle = '#2c3e50';
                     ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); 
@@ -405,16 +557,18 @@
                     ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
                 });
 
-                // MEC
                 if (mec && mec.r > 0) {
                     ctx.strokeStyle = color ? color : (highlightCircle ? '#e74c3c' : '#3498db');
                     ctx.lineWidth = (highlightCircle ? 3 : 2) * invZ;
                     ctx.beginPath(); ctx.arc(mec.x, mec.y, Math.max(mec.r, 0), 0, Math.PI*2); ctx.stroke();
                     ctx.fillStyle = ctx.strokeStyle;
                     ctx.beginPath(); ctx.arc(mec.x, mec.y, 3 * invZ, 0, Math.PI*2); ctx.fill();
+                    
+                    if (mec.def && mec.def.length === 2) {
+                        drawDiameterLine(mec.def[0], mec.def[1], ctx.strokeStyle, invZ);
+                    }
                 }
 
-                // Loop Highlights
                 if (pI) drawHighlightPoint(pI, '#e74c3c', 7 * invZ, invZ); 
                 if (pJ) drawHighlightPoint(pJ, '#f39c12', 7 * invZ, invZ); 
                 if (pK) drawHighlightPoint(pK, '#9b59b6', 7 * invZ, invZ); 
@@ -422,38 +576,60 @@
             } else if (currentRenderState.mode === 'clarkson') {
                 const { mec, sampled, safe, violations } = currentRenderState;
 
-                // 1. Safe Points (Grey)
                 ctx.fillStyle = '#bdc3c7';
-                safe.forEach(p => { 
-                    ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); 
-                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
-                });
+                safe.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);});
 
-                // 2. Sampled Points (Blue)
                 ctx.fillStyle = '#3498db';
-                sampled.forEach(p => { 
-                    ctx.beginPath(); ctx.arc(p.x, p.y, 5 * invZ, 0, Math.PI*2); ctx.fill(); 
-                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
-                });
+                sampled.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 5 * invZ, 0, Math.PI*2); ctx.fill(); ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);});
 
-                // 3. Violations (Red)
                 ctx.fillStyle = '#e74c3c';
                 violations.forEach(p => { 
-                    ctx.beginPath(); ctx.arc(p.x, p.y, 6 * invZ, 0, Math.PI*2); ctx.fill(); 
-                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
-                    // Add an X over the point
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 6 * invZ, 0, Math.PI*2); ctx.fill(); ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
                     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * invZ;
                     ctx.beginPath(); ctx.moveTo(p.x - 4*invZ, p.y - 4*invZ); ctx.lineTo(p.x + 4*invZ, p.y + 4*invZ); ctx.stroke();
                     ctx.beginPath(); ctx.moveTo(p.x + 4*invZ, p.y - 4*invZ); ctx.lineTo(p.x - 4*invZ, p.y + 4*invZ); ctx.stroke();
                 });
 
-                // 4. MEC (Blue)
                 if (mec && mec.r > 0) {
-                    ctx.strokeStyle = '#3498db';
-                    ctx.lineWidth = 2 * invZ;
+                    ctx.strokeStyle = '#3498db'; ctx.lineWidth = 2 * invZ;
                     ctx.beginPath(); ctx.arc(mec.x, mec.y, Math.max(mec.r, 0), 0, Math.PI*2); ctx.stroke();
-                    ctx.fillStyle = '#3498db';
-                    ctx.beginPath(); ctx.arc(mec.x, mec.y, 3 * invZ, 0, Math.PI*2); ctx.fill();
+                    
+                    if (mec.def && mec.def.length === 2) {
+                        drawDiameterLine(mec.def[0], mec.def[1], ctx.strokeStyle, invZ);
+                    }
+                }
+
+            } else if (currentRenderState.mode === 'bruteforce') {
+                const { testingCircle, activePoints, violations, bestCircle } = currentRenderState;
+
+                points.forEach(p => { 
+                    ctx.fillStyle = '#2c3e50';
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillStyle = '#7f8c8d';
+                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
+                });
+
+                activePoints.forEach(p => { drawHighlightPoint(p, '#f1c40f', 6 * invZ, invZ); });
+                violations.forEach(p => { drawHighlightPoint(p, '#e74c3c', 6 * invZ, invZ); });
+
+                if (testingCircle && testingCircle.r > 0) {
+                    ctx.strokeStyle = '#f1c40f'; ctx.lineWidth = 1.5 * invZ;
+                    ctx.setLineDash([5 * invZ, 5 * invZ]);
+                    ctx.beginPath(); ctx.arc(testingCircle.x, testingCircle.y, Math.max(testingCircle.r, 0), 0, Math.PI*2); ctx.stroke();
+                    ctx.setLineDash([]);
+                    
+                    if (activePoints.length === 2) {
+                        drawDiameterLine(activePoints[0], activePoints[1], '#f1c40f', invZ);
+                    }
+                }
+
+                if (bestCircle && bestCircle.r > 0) {
+                    ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 3 * invZ;
+                    ctx.beginPath(); ctx.arc(bestCircle.x, bestCircle.y, Math.max(bestCircle.r, 0), 0, Math.PI*2); ctx.stroke();
+                    
+                    if (bestCircle.def && bestCircle.def.length === 2) {
+                        drawDiameterLine(bestCircle.def[0], bestCircle.def[1], '#2ecc71', invZ);
+                    }
                 }
             }
             ctx.restore();
