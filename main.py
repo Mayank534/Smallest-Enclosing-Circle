@@ -19,7 +19,7 @@ app.add_middleware(
 class PointsInput(BaseModel):
     points: List[Tuple[float, float]]
 
-# Serve the HTML frontend
+# This tells FastAPI to serve your index.html when you visit the main Render URL
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     with open("index.html", "r", encoding="utf-8") as f:
