@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deterministic MEC Visualizer</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
+        .header-controls { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .main-container { display: flex; gap: 20px; align-items: flex-start; }
+        canvas { background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); cursor: crosshair; flex-shrink: 0; }
+        .info-panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); flex-grow: 1; max-width: 550px; }
+        button { padding: 8px 14px; border: none; border-radius: 4px; cursor: pointer; background-color: #007bff; color: white; font-weight: bold; }
+        button:hover { background-color: #0056b3; }
+        .btn-danger { background-color: #dc3545; }
+        .btn-danger:hover { background-color: #c82333; }
+        .btn-success { background-color: #28a745; }
+        .btn-warning { background-color: #e67e22; }
+        .btn-warning:hover { background-color: #d35400; }
+        .btn-info { background-color: #17a2b8; }
+        .btn-info:hover { background-color: #138496; }
+        .btn-zoom { background-color: #6c757d; font-size: 14px; padding: 6px 10px;}
+        .btn-zoom:hover { background-color: #5a6268; }
+        
+        pre { background: #2d2d2d; color: #ccc; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.4; margin-bottom: 0;}
+        .code-line { display: block; padding: 2px 5px; border-radius: 3px; transition: background 0.2s;}
+        .active-line { background: #0056b3; color: white; font-weight: bold; }
+        
+        #status-text { font-size: 1.1em; font-weight: bold; color: #333; margin-bottom: 15px; min-height: 45px; border-left: 4px solid #007bff; padding-left: 10px;}
+        .legend span { display: inline-block; margin-right: 15px; font-size: 13px; margin-bottom: 10px; font-weight: bold;}
+        .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 4px;}
+        .metrics { margin-bottom: 15px; padding: 10px; background: #e8f4f8; border-radius: 4px; border: 1px solid #bce8f1; font-family: monospace; font-size: 14px; display: none;}
+        .clarkson-metrics { background: #fff3cd; border: 1px solid #ffeeba; }
+    </style>
+</head>
+<body>
+
+    <div class="header-controls">
+        <button class="btn-danger" onclick="clearCanvas()">Clear</button>
+        <button onclick="generateRandomPoints(7)">Add 7 Random</button>
+        <button class="btn-warning" onclick="shufflePoints()">Shuffle Order</button>
+        
+        <div style="border-left: 2px solid #eee; height: 30px;"></div>
+        
+        <button class="btn-zoom" onclick="zoomCanvas(1.25)">➕</button>
+        <button class="btn-zoom" onclick="zoomCanvas(0.8)">➖</button>
+        <span id="zoom-level-text" onclick="resetZoom()" style="font-family: monospace; font-weight: bold; width: 45px; text-align: center; font-size: 14px; cursor: pointer; color: #007bff;" title="Click to reset zoom">1x</span>
+        <div style="border-left: 2px solid #eee; height: 30px;"></div>
+
+        <button class="btn-success" onclick="calculateFastAPI()">FastAPI (CGAL)</button>
+        <button style="background: #8e44ad;" onclick="startVisualization()">Step-by-Step</button>
+        
+        <button class="btn-info" onclick="runClarksons()">Test Clarkson (n/2)</button>
+        
+        <label style="font-size: 14px;">Speed: <input type="range" id="speed" min="50" max="1500" value="500" style="direction: rtl; width: 80px;"></label>
+    </div>
+
+    <div class="main-container">
+        <canvas id="canvas" width="700" height="550"></canvas>
+        
+        <div class="info-panel">
+            <div id="status-text">Click canvas to add points, then choose a mode.</div>
+            
+            <div id="metrics" class="metrics"></div>
+            
+            <div class="legend" id="standard-legend">
+                <span><span class="dot" style="background:#2c3e50;"></span> Point</span>
+                <span><span class="dot" style="background:#e74c3c;"></span> i (Outer)</span>
+                <span><span class="dot" style="background:#f39c12;"></span> j (Middle)</span>
+                <span><span class="dot" style="background:#9b59b6;"></span> k (Inner)</span>
+            </div>
+
+            <div class="legend" id="clarkson-legend" style="display: none;">
+                <span><span class="dot" style="background:#3498db;"></span> Sampled (n/2)</span>
+                <span><span class="dot" style="background:#bdc3c7;"></span> Safe (Inside)</span>
+                <span><span class="dot" style="background:#e74c3c;"></span> Violation (Outside)</span>
+            </div>
+
+            <pre><code id="code-block">
+<span id="line-1" class="code-line">mec = circle_from_2_points(P[0], P[1]);</span>
+<span id="line-2" class="code-line">for (int i = 2; i < n; i++) {</span>
+<span id="line-3" class="code-line">  if (!is_inside(mec, P[i])) {</span>
+<span id="line-4" class="code-line">    mec = circle_from_2_points(P[0], P[i]);</span>
+<span id="line-5" class="code-line">    for (int j = 1; j < i; j++) {</span>
+<span id="line-6" class="code-line">      if (!is_inside(mec, P[j])) {</span>
+<span id="line-7" class="code-line">        mec = circle_from_2_points(P[i], P[j]);</span>
+<span id="line-8" class="code-line">        for (int k = 0; k < j; k++) {</span>
+<span id="line-9" class="code-line">          if (!is_inside(mec, P[k])) {</span>
+<span id="line-10" class="code-line">            mec = circle_from_3_points(P[i], P[j], P[k]);</span>
+<span id="line-11" class="code-line">          }</span>
+<span id="line-12" class="code-line">        }</span>
+<span id="line-13" class="code-line">      }</span>
+<span id="line-14" class="code-line">    }</span>
+<span id="line-15" class="code-line">  }</span>
+<span id="line-16" class="code-line">}</span>
+            </code></pre>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let points = []; 
+        let isAnimating = false;
+        
+        // --- View & Render State ---
+        let zoomLevel = 1.0;
+        // ADDED 'mode' to track which renderer to use
+        let currentRenderState = { mode: 'standard', mec: null, pI: null, pJ: null, pK: null, highlightCircle: false, color: null };
+
+        // --- Math Helpers ---
+        function getDistance(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
+        function isInside(c, p) { return c && getDistance(c, p) <= c.r + 1e-9; }
+        function circleFrom2Points(a, b) { return { x: (a.x + b.x) / 2.0, y: (a.y + b.y) / 2.0, r: getDistance(a, b) / 2.0 }; }
+        
+        function circleFrom3Points(a, b, c) {
+            const bx = b.x - a.x, by = b.y - a.y;
+            const cx = c.x - a.x, cy = c.y - a.y;
+            const B = bx * bx + by * by;
+            const C = cx * cx + cy * cy;
+            const D = bx * cy - by * cx;
+            if (Math.abs(D) < 1e-9) return { x: 0, y: 0, r: 0 };
+            const ux = (cy * B - by * C) / (2 * D) + a.x;
+            const uy = (bx * C - cx * B) / (2 * D) + a.y;
+            return { x: ux, y: uy, r: getDistance({x: ux, y: uy}, a) };
+        }
+
+        // NEW: Fast Synchronous MEC for Clarkson's Bound calculation
+        function computeMECSync(P) {
+            let n = P.length;
+            if (n === 0) return {x:0, y:0, r:0};
+            if (n === 1) return {x: P[0].x, y: P[0].y, r: 0};
+            let mec = circleFrom2Points(P[0], P[1]);
+            for (let i = 2; i < n; i++) {
+                if (!isInside(mec, P[i])) {
+                    mec = circleFrom2Points(P[0], P[i]);
+                    for (let j = 1; j < i; j++) {
+                        if (!isInside(mec, P[j])) {
+                            mec = circleFrom2Points(P[i], P[j]);
+                            for (let k = 0; k < j; k++) {
+                                if (!isInside(mec, P[k])) {
+                                    mec = circleFrom3Points(P[i], P[j], P[k]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return mec;
+        }
+
+        // --- Zoom Logic ---
+        function zoomCanvas(factor) {
+            zoomLevel *= factor;
+            zoomLevel = Math.round(zoomLevel * 1000) / 1000;
+            if (Math.abs(zoomLevel - 1.0) < 0.05) { zoomLevel = 1.0; }
+            if(zoomLevel < 0.1) zoomLevel = 0.1; 
+            if(zoomLevel > 10) zoomLevel = 10;     
+            let displayText = zoomLevel % 1 === 0 ? zoomLevel : zoomLevel.toFixed(1);
+            document.getElementById('zoom-level-text').innerText = displayText + "x";
+            renderCanvas();
+        }
+
+        function resetZoom() {
+            zoomLevel = 1.0;
+            document.getElementById('zoom-level-text').innerText = "1x";
+            renderCanvas();
+        }
+
+        // --- User Inputs ---
+        canvas.onclick = (e) => {
+            if(isAnimating) return;
+            const rect = canvas.getBoundingClientRect();
+            const rawX = e.clientX - rect.left;
+            const rawY = e.clientY - rect.top;
+            const worldX = (rawX - canvas.width / 2) / zoomLevel + canvas.width / 2;
+            const worldY = (rawY - canvas.height / 2) / zoomLevel + canvas.height / 2;
+
+            points.push({x: worldX, y: worldY, id: points.length});
+            updateVisuals(null, null, null, null); 
+        };
+
+        function generateRandomPoints(num) {
+            if(isAnimating) return;
+            const padding = 50; 
+            for (let i = 0; i < num; i++) {
+                points.push({
+                    x: padding + Math.random() * (canvas.width - padding * 2),
+                    y: padding + Math.random() * (canvas.height - padding * 2),
+                    id: points.length
+                });
+            }
+            updateVisuals(null, null, null, null);
+        }
+
+        function clearCanvas() {
+            isAnimating = false;
+            points = [];
+            resetZoom();
+            updateVisuals(null, null, null, null);
+            document.getElementById('status-text').innerText = "Canvas cleared.";
+            document.getElementById('metrics').style.display = 'none';
+            highlightLine(0);
+        }
+
+        function shufflePoints() {
+            if(isAnimating || points.length === 0) return;
+            for (let i = points.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [points[i], points[j]] = [points[j], points[i]];
+            }
+            points.forEach((p, i) => p.id = i);
+            updateVisuals(null, null, null, null);
+            document.getElementById('status-text').innerText = "Order randomized! Notice how the labels changed positions.";
+            document.getElementById('metrics').style.display = 'none';
+        }
+
+        // --- NEW: Clarkson's Logic ---
+        function runClarksons() {
+            if (isAnimating) return;
+            if (points.length < 20) { generateRandomPoints(50 - points.length); } // Auto-fill for good demo
+
+            const n = points.length;
+            const k = Math.floor(n / 2);
+
+            let shuffled = [...points].sort(() => Math.random() - 0.5);
+            let sampled = shuffled.slice(0, k);
+            let remaining = shuffled.slice(k);
+
+            let mec = computeMECSync(sampled);
+
+            let violations = [];
+            let safe = [];
+            for (let p of remaining) {
+                if (getDistance(mec, p) > mec.r + 1e-9) { violations.push(p); } 
+                else { safe.push(p); }
+            }
+
+            let expected = 3 * (n - k) / (k + 1);
+
+            document.getElementById('standard-legend').style.display = 'none';
+            document.getElementById('clarkson-legend').style.display = 'block';
+            document.getElementById('status-text').innerText = "Clarkson's Identity: Visualizing Violations";
+            
+            const metricsDiv = document.getElementById('metrics');
+            metricsDiv.className = 'metrics clarkson-metrics';
+            metricsDiv.style.display = 'block';
+            metricsDiv.innerHTML = `
+                <strong>Total Points (n):</strong> ${n}<br>
+                <strong>Sampled Points (k):</strong> ${k}<br>
+                <hr style="border-top:1px solid #ffeeba; margin: 8px 0;">
+                <strong>Expected Violations:</strong> <span style="color:#e67e22">${expected.toFixed(2)}</span> 
+                <span style="font-size:11px; color:#856404;">[ Formula: 3 * (n-k)/(k+1) ]</span><br>
+                <strong>Actual Violations:</strong> <span style="color:#c0392b; font-weight:bold;">${violations.length}</span>
+            `;
+
+            highlightLine(0);
+            currentRenderState = { mode: 'clarkson', mec, sampled, safe, violations };
+            renderCanvas();
+        }
+
+        // --- FastAPI Hook ---
+        async function calculateFastAPI() {
+            if (points.length === 0 || isAnimating) return;
+            const payload = points.map(p => [p.x, p.y]);
+            
+            document.getElementById('status-text').innerText = "Computing via CGAL...";
+            
+            try {
+                const response = await fetch('http://127.0.0.1:8000/calculate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ points: payload })
+                });
+                const data = await response.json();
+                
+                updateVisuals({x: data.center_x, y: data.center_y, r: data.radius}, null, null, null, false, '#28a745');
+                
+                document.getElementById('status-text').innerText = "CGAL Backend Computation Complete!";
+                const metricsDiv = document.getElementById('metrics');
+                metricsDiv.className = 'metrics'; // reset style
+                metricsDiv.style.display = 'block';
+                metricsDiv.innerHTML = `
+                    <strong>Center:</strong> (${data.center_x.toFixed(2)}, ${data.center_y.toFixed(2)})<br>
+                    <strong>Radius:</strong> ${data.radius.toFixed(2)}<br>
+                    <strong>Time Taken (C++):</strong> ${data.time_ms !== undefined ? data.time_ms.toFixed(5) + ' ms' : 'N/A'}
+                `;
+            } catch (err) {
+                document.getElementById('status-text').innerText = "FastAPI Error: Is the backend running?";
+            }
+        }
+
+        // --- Visualization Mode ---
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        function highlightLine(lineNum) {
+            document.querySelectorAll('.code-line').forEach(el => el.classList.remove('active-line'));
+            if(lineNum > 0) document.getElementById(`line-${lineNum}`).classList.add('active-line');
+        }
+
+        async function startVisualization() {
+            if (points.length < 2 || isAnimating) return;
+            isAnimating = true;
+            document.getElementById('metrics').style.display = 'none';
+            await deterministicMEC(points);
+            isAnimating = false;
+            highlightLine(0);
+        }
+
+        async function deterministicMEC(P) {
+            let n = P.length;
+            let speed = document.getElementById('speed').value;
+
+            highlightLine(1);
+            let mec = circleFrom2Points(P[0], P[1]);
+            document.getElementById('status-text').innerText = `Init: Circle from P[0] and P[1]`;
+            updateVisuals(mec, null, null, null);
+            await sleep(speed);
+
+            for (let i = 2; i < n; i++) {
+                if(!isAnimating) return;
+                
+                highlightLine(2);
+                document.getElementById('status-text').innerText = `Loop i: Checking P[${i}]`;
+                updateVisuals(mec, P[i], null, null);
+                await sleep(speed);
+
+                highlightLine(3);
+                if (!isInside(mec, P[i])) {
+                    highlightLine(4);
+                    mec = circleFrom2Points(P[0], P[i]);
+                    document.getElementById('status-text').innerText = `P[${i}] OUTSIDE. New MEC = P[0], P[${i}]`;
+                    updateVisuals(mec, P[i], null, null, true);
+                    await sleep(speed * 1.5);
+
+                    for (let j = 1; j < i; j++) {
+                        if(!isAnimating) return;
+                        highlightLine(5);
+                        document.getElementById('status-text').innerText = `Loop j: Checking P[${j}]`;
+                        updateVisuals(mec, P[i], P[j], null);
+                        await sleep(speed);
+
+                        highlightLine(6);
+                        if (!isInside(mec, P[j])) {
+                            highlightLine(7);
+                            mec = circleFrom2Points(P[i], P[j]);
+                            document.getElementById('status-text').innerText = `P[${j}] OUTSIDE. New MEC = P[${i}], P[${j}]`;
+                            updateVisuals(mec, P[i], P[j], null, true);
+                            await sleep(speed * 1.5);
+
+                            for (let k = 0; k < j; k++) {
+                                if(!isAnimating) return;
+                                highlightLine(8);
+                                document.getElementById('status-text').innerText = `Loop k: Checking P[${k}]`;
+                                updateVisuals(mec, P[i], P[j], P[k]);
+                                await sleep(speed);
+
+                                highlightLine(9);
+                                if (!isInside(mec, P[k])) {
+                                    highlightLine(10);
+                                    mec = circleFrom3Points(P[i], P[j], P[k]);
+                                    document.getElementById('status-text').innerText = `P[${k}] OUTSIDE. New MEC = P[${i}], P[${j}], P[${k}]`;
+                                    updateVisuals(mec, P[i], P[j], P[k], true);
+                                    await sleep(speed * 1.5);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            updateVisuals(mec, null, null, null);
+            document.getElementById('status-text').innerText = "Visualization Complete!";
+            return mec;
+        }
+
+        // --- Core Rendering Engine ---
+        function updateVisuals(mec, pI, pJ, pK, highlightCircle = false, color = null) {
+            // Forces standard mode rendering
+            document.getElementById('clarkson-legend').style.display = 'none';
+            document.getElementById('standard-legend').style.display = 'block';
+            currentRenderState = { mode: 'standard', mec, pI, pJ, pK, highlightCircle, color };
+            renderCanvas();
+        }
+
+        function renderCanvas() {
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0); 
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.scale(zoomLevel, zoomLevel);
+            ctx.translate(-canvas.width / 2, -canvas.height / 2);
+
+            const invZ = 1 / zoomLevel; 
+            ctx.font = `bold ${13 * invZ}px monospace`;
+
+            if (currentRenderState.mode === 'standard') {
+                const { mec, pI, pJ, pK, highlightCircle, color } = currentRenderState;
+                
+                // Base Points
+                points.forEach(p => { 
+                    ctx.fillStyle = '#2c3e50';
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillStyle = '#7f8c8d';
+                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
+                });
+
+                // MEC
+                if (mec && mec.r > 0) {
+                    ctx.strokeStyle = color ? color : (highlightCircle ? '#e74c3c' : '#3498db');
+                    ctx.lineWidth = (highlightCircle ? 3 : 2) * invZ;
+                    ctx.beginPath(); ctx.arc(mec.x, mec.y, Math.max(mec.r, 0), 0, Math.PI*2); ctx.stroke();
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.beginPath(); ctx.arc(mec.x, mec.y, 3 * invZ, 0, Math.PI*2); ctx.fill();
+                }
+
+                // Loop Highlights
+                if (pI) drawHighlightPoint(pI, '#e74c3c', 7 * invZ, invZ); 
+                if (pJ) drawHighlightPoint(pJ, '#f39c12', 7 * invZ, invZ); 
+                if (pK) drawHighlightPoint(pK, '#9b59b6', 7 * invZ, invZ); 
+
+            } else if (currentRenderState.mode === 'clarkson') {
+                const { mec, sampled, safe, violations } = currentRenderState;
+
+                // 1. Safe Points (Grey)
+                ctx.fillStyle = '#bdc3c7';
+                safe.forEach(p => { 
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 4 * invZ, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
+                });
+
+                // 2. Sampled Points (Blue)
+                ctx.fillStyle = '#3498db';
+                sampled.forEach(p => { 
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 5 * invZ, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
+                });
+
+                // 3. Violations (Red)
+                ctx.fillStyle = '#e74c3c';
+                violations.forEach(p => { 
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 6 * invZ, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillText(`P[${p.id}]`, p.x + 8*invZ, p.y - 8*invZ);
+                    // Add an X over the point
+                    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * invZ;
+                    ctx.beginPath(); ctx.moveTo(p.x - 4*invZ, p.y - 4*invZ); ctx.lineTo(p.x + 4*invZ, p.y + 4*invZ); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(p.x + 4*invZ, p.y - 4*invZ); ctx.lineTo(p.x - 4*invZ, p.y + 4*invZ); ctx.stroke();
+                });
+
+                // 4. MEC (Blue)
+                if (mec && mec.r > 0) {
+                    ctx.strokeStyle = '#3498db';
+                    ctx.lineWidth = 2 * invZ;
+                    ctx.beginPath(); ctx.arc(mec.x, mec.y, Math.max(mec.r, 0), 0, Math.PI*2); ctx.stroke();
+                    ctx.fillStyle = '#3498db';
+                    ctx.beginPath(); ctx.arc(mec.x, mec.y, 3 * invZ, 0, Math.PI*2); ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawHighlightPoint(p, color, size, invZ) {
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(p.x, p.y, size, 0, Math.PI*2); ctx.fill();
+            ctx.strokeStyle = '#fff'; 
+            ctx.lineWidth = 1.5 * invZ; 
+            ctx.stroke();
+        }
+    </script>
+</body>
+</html>
