@@ -64,7 +64,7 @@ g++ -O3 random_sampling.cpp -lgmp -lmpfr -o random_sampling
 
 ---
 
-## ▶️ Running the Programs
+##  Running the Programs
 
 ### Deterministic MEC
 ```bash
@@ -88,7 +88,7 @@ g++ -O3 random_sampling.cpp -lgmp -lmpfr -o random_sampling
 
 ---
 
-## 🌐 Simulation
+##  Simulation
 
 The `simulation/` folder contains an interactive visualization of all implemented algorithms.
 
@@ -102,7 +102,7 @@ The `simulation/` folder contains an interactive visualization of all implemente
 
 ---
 
-## 🐳 Simulation Setup (Optional)
+##  Simulation Setup (Optional)
 
 Inside `simulation/`:
 
@@ -120,7 +120,7 @@ python main.py
 
 ---
 
-## 📌 Notes
+##  Notes
 
 - CGAL-based implementations rely on **randomization**
 - Deterministic implementation is primarily for **theoretical comparison**
@@ -128,7 +128,7 @@ python main.py
 
 ---
 
-## 🚀 Summary
+##  Summary
 
 | File                | Approach              | Complexity     | Notes                          |
 |---------------------|----------------------|----------------|--------------------------------|
@@ -138,7 +138,3 @@ python main.py
 | `random_sampling.cpp` | Sampling Heuristic | Varies         | Tests multiple sampling sizes  |
 
 ---
-
-## 👨‍💻 Author
-
-Developed as part of coursework/project for computational geometry and performance analysis.
